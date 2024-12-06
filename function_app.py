@@ -83,6 +83,7 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
         "top_p": 0.95,
         "max_tokens": 800
     }
+    logging.info(payload)
     try:
         response = requests.post(ENDPOINT, headers=headers, json=payload)
         response.raise_for_status()  # Will raise an HTTPError if the HTTP request returned an unsuccessful status code
