@@ -6,3 +6,4 @@ azure-functions
 openai
 azure-data-tables
 azure-storage-blob
+redis

@@ -1,10 +1,12 @@
 import azure.functions as func
-import datetime
+import hashlib
+import json
 import requests  
 import json
 import logging
 import os
 import traceback
+import redis
 
 from openai import AzureOpenAI
 from azure.functions import HttpRequest, HttpResponse
@@ -72,6 +74,21 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
             "Invalid request. Ensure the request body is JSON with 'messages' field.",
             status_code=400
         )
+    
+    cache_key = f"chat:{generate_cache_key(messages)}"
+    redis_client = init_redis()
+
+    cached_response = redis_client.get(cache_key)
+
+    if cached_response:
+        logging.info("Returning cached response.")
+        # Return cached response
+        return func.HttpResponse(
+            cached_response,
+            status_code=200,
+            mimetype="application/json"
+        )
+
     headers = {
         "Content-Type": "application/json",
         "api-key": os.getenv("AZURE_OPENAI_API_KEY"),
@@ -97,8 +114,17 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
         "response": response_text
     }
 
+    response_json_string = json.dumps(response_data)
+
+    try:
+        one_month_ttl = 30 * 24 * 60 * 60  # 30 days in seconds
+        redis_client.set(cache_key, response_json_string, ex=one_month_ttl)
+        logging.info("Response cached successfully.")
+    except Exception as e:
+        logging.error(f"Failed to cache the response in Redis. Error: {e}")
+
     return func.HttpResponse(
-        json.dumps(response_data),
+        response_json_string,
         status_code=200,
         mimetype="application/json")
 
@@ -198,3 +224,36 @@ def editprompt(req: func.HttpRequest) -> func.HttpResponse:
             f"An error occurred: {str(e)}",
             status_code=500
         )
+
+
+def generate_cache_key(messages):
+    # Convert the messages to a JSON string
+    messages_json = json.dumps(messages, sort_keys=True)
+    # Generate a SHA256 hash of the JSON string
+    return hashlib.sha256(messages_json.encode()).hexdigest()
+
+def init_redis():
+    """
+    Initializes and returns a Redis client instance.
+    """
+
+    redis_host = os.getenv('REDIS_HOST')  # Redis host from environment variables
+    redis_password = os.getenv('REDIS_PASSWORD')  # Redis password from environment variables
+    redis_port = int(os.getenv('REDIS_PORT', 6380))  # Redis port, default to 6379
+    try:
+        # Initialize the Redis client
+        redis_client = redis.StrictRedis(
+            host=redis_host,
+            port=redis_port,
+            ssl=True,
+            password=redis_password,
+            # username=user_name,
+            decode_responses=True  # Enables Unicode responses
+        )
+
+        # Test the connection
+        redis_client.ping()
+        logging.info("Connected to Redis successfully.")
+        return redis_client
+    except redis.ConnectionError as e:
+        raise SystemExit(f"Failed to connect to Redis. Error: {e}")
